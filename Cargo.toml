@@ -1,0 +1,6 @@
+[package]
+name = "ternary-cache"
+version = "0.1.0"
+edition = "2021"
+description = "Ternary-aware cache with stateful entries"
+license = "MIT"
