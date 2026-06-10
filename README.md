@@ -1,83 +1,78 @@
 # ternary-cache
 
-**Ternary cache: caching with entries in {-1=invalid, 0=stale, +1=fresh} states**
+Caching with ternary entry states — Invalid (-1), Stale (0), Fresh (+1).
 
-[![ternary](https://img.shields.io/badge/ecosystem-ternary-blue)](https://github.com/orgs/SuperInstance/repositories?q=ternary)
-[![tests](https://img.shields.io/badge/tests-8-green)]()
+## Why This Exists
 
-## Overview
-
-Ternary cache: caching with entries in {-1=invalid, 0=stale, +1=fresh} states.
+Standard caches are binary: hit or miss. But cached data has three meaningful states: **Fresh** (confirmed current), **Stale** (was valid but TTL expired — still usable with a warning), and **Invalid** (explicitly invalidated or never populated). Treating stale data as "miss" forces unnecessary recomputation. Treating it as "hit" serves outdated results. Ternary cache gives you the third option: serve stale data while asynchronously refreshing.
 
 ## Architecture
 
-- **`CacheEntry`** — core data structure
-- **`TernaryCache`** — core data structure
-- **`CacheState`** — state enumeration
+### Core Types
 
-### Key Functions
+- **`CacheState`** — Enum: `Invalid (-1)`, `Stale (0)`, `Fresh (+1)`.
+- **`CacheEntry<V>`** — A generic entry with value, state, access count, and insertion tick.
+- **`TernaryCache<V: Clone>`** — LRU cache with capacity tracking and state transitions.
 
-- `to_i8()`
-- `new()`
-- `insert()`
-- `get()`
-- `invalidate()`
-- `stale()`
-- `refresh()`
-- `len()`
-- `is_empty()`
-- `state_distribution()`
-- ... and 2 more
+### State Transitions
 
-## Why Ternary?
-
-The balanced ternary system {-1, 0, +1} (also known as Z₃) is the mathematically optimal discrete encoding:
-- **More expressive than binary**: three states capture positive, neutral, and negative
-- **Natural for decisions**: accept/reject/abstain, buy/hold/sell, agree/disagree/neutral
-- **Self-balancing**: the 0 state acts as a universal screen, preventing pathological lock-in
-- **Z₃ cyclic dynamics**: rock-paper-scissors is the only natural coordination mechanism
-
-## Stats
-
-| Metric | Value |
-|--------|-------|
-| Lines of Rust | 206 |
-| Test count | 8 |
-| Public types | 3 |
-| Public functions | 12 |
-
-## Ecosystem
-
-This crate is part of the **[SuperInstance Ternary Fleet](https://github.com/orgs/SuperInstance/repositories?q=ternary)**:
-
-- **[ternary-core](https://github.com/SuperInstance/ternary-core)** — shared traits and Z₃ arithmetic
-- **[ternary-grid](https://github.com/SuperInstance/ternary-grid)** — spatial grid with {-1, 0, +1} cells
-- **[ternary-graph](https://github.com/SuperInstance/ternary-graph)** — ternary-weighted graph algorithms
-- **[ternary-automata](https://github.com/SuperInstance/ternary-automata)** — three-state cellular automata
-- **[ternary-compiler](https://github.com/SuperInstance/ternary-compiler)** — expression compiler and optimizer
-
-200+ crates. 4,300+ tests. One pattern.
-
-## Research Context
-
-The ternary approach connects to several active research areas:
-- **Ternary Neural Networks** (TNNs): weights constrained to {-1, 0, +1} for efficient inference
-- **Huawei's ternary chip**: 7nm ternary silicon with 60% less power consumption
-- **Active inference**: free energy minimization naturally maps to ternary action selection
-- **Cyclic dominance**: RPS dynamics maintain biodiversity in spatial ecology
-- **Z₃ group theory**: the only algebraic group on three elements is cyclic addition mod 3
+- `insert` → Fresh
+- `get` → Returns `(V, CacheState)`. Fresh entries return normally.
+- `stale` → Transition to Stale without removing data.
+- `invalidate` → Mark as Invalid (data removed).
+- `refresh` → Update value, reset to Fresh.
+- `expire(ttl)` → All entries older than `ttl` ticks transition Fresh → Stale.
 
 ## Usage
 
-```toml
-[dependencies]
-ternary-cache = "0.1.0"
-```
-
 ```rust
-use ternary_cache;
+use ternary_cache::{TernaryCache, CacheState};
+
+let mut cache: TernaryCache<Vec<i8>> = TernaryCache::new(100);
+
+// Insert fresh data
+cache.insert("layer_0_weights", vec![1, 0, -1, 1]);
+
+// Get with state awareness
+if let Some((weights, state)) = cache.get("layer_0_weights") {
+    match state {
+        CacheState::Fresh => println!("Using cached weights"),
+        CacheState::Stale => println!("Using stale weights, refresh recommended"),
+        CacheState::Invalid => println!("Cache miss"),
+    }
+}
+
+// Time passes — mark as stale
+cache.stale("layer_0_weights");
+
+// Periodic expiry
+let expired = cache.expire(1000); // entries older than 1000 ticks
+
+// Distribution: (invalid, stale, fresh)
+let (inv, stale, fresh) = cache.state_distribution();
 ```
 
-## License
+## API Reference
 
-MIT
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `new(capacity)` | `TernaryCache<V>` | Create cache with max entries |
+| `insert(key, value)` | `()` | Insert as Fresh |
+| `get(key)` | `Option<(V, CacheState)>` | Get value with state |
+| `invalidate(key)` | `bool` | Mark Invalid (removes data) |
+| `stale(key)` | `bool` | Downgrade to Stale |
+| `refresh(key, value)` | `bool` | Update value, reset to Fresh |
+| `len()` / `is_empty()` | `usize` / `bool` | Entry count |
+| `state_distribution()` | `(usize, usize, usize)` | (Invalid, Stale, Fresh) counts |
+| `expire(ttl)` | `usize` | Expire entries older than `ttl` ticks |
+| `hit_rate(hits, misses)` | `f64` | Calculate hit rate |
+
+## The Deeper Idea
+
+The stale state is **eventual consistency for caches**. In a distributed system, you often have cached data that's "probably still valid" but you haven't confirmed. Rather than blocking on a freshness check (latency) or blindly serving (correctness risk), serve stale with a flag that triggers async refresh. This is the pattern used by DNS (TTL with stale-while-revalidate), HTTP (stale-while-revalidate), and CDN edge caches. Ternary cache makes this a first-class API.
+
+## Related Crates
+
+- **ternary-gc** — garbage collection with ternary marking
+- **ternary-intent-cache** — intent-to-bytecode compilation cache
+- **ternary-mirror** — state mirroring with ternary consistency
